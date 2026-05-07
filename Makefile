@@ -78,6 +78,50 @@ XPKGS = $(PROJECT_NAME)
 -include build/makelib/xpkg.mk
 
 # ====================================================================================
+# Local Artifact Registry Publishing
+
+ARTIFACT_REGISTRY ?=
+ARTIFACT_REGISTRY_PLATFORM ?= $(PLATFORM)
+ARTIFACT_REGISTRY_ARCH := $(word 2,$(subst _, ,$(ARTIFACT_REGISTRY_PLATFORM)))
+ARTIFACT_REGISTRY_OCI_PLATFORM := linux/$(ARTIFACT_REGISTRY_ARCH)
+ARTIFACT_REGISTRY_RUNTIME_IMAGE ?= $(ARTIFACT_REGISTRY)/$(PROJECT_NAME)-runtime:$(VERSION)-$(ARTIFACT_REGISTRY_ARCH)
+ARTIFACT_REGISTRY_RUNTIME_TARBALL ?= $(OUTPUT_DIR)/images/$(ARTIFACT_REGISTRY_PLATFORM)/$(PROJECT_NAME)-runtime-$(VERSION)-$(ARTIFACT_REGISTRY_ARCH).tar
+ARTIFACT_REGISTRY_XPKG_FILE ?= $(XPKG_OUTPUT_DIR)/$(ARTIFACT_REGISTRY_PLATFORM)/$(PROJECT_NAME)-$(VERSION).xpkg
+ARTIFACT_REGISTRY_PACKAGE ?= $(ARTIFACT_REGISTRY)/$(PROJECT_NAME):$(VERSION)
+
+artifact-registry.publish: build.init
+	@if [ -z "$(ARTIFACT_REGISTRY)" ]; then \
+		echo "ARTIFACT_REGISTRY is required, for example: us-central1-docker.pkg.dev/my-project/my-repo"; \
+		exit 1; \
+	fi
+	@$(INFO) building $(PROJECT_NAME) binary for $(ARTIFACT_REGISTRY_PLATFORM)
+	@$(MAKE) build.code.platform PLATFORM=$(ARTIFACT_REGISTRY_PLATFORM)
+	@$(OK) building $(PROJECT_NAME) binary for $(ARTIFACT_REGISTRY_PLATFORM)
+	@$(INFO) building runtime image tarball $(ARTIFACT_REGISTRY_RUNTIME_TARBALL)
+	@mkdir -p $(dir $(ARTIFACT_REGISTRY_RUNTIME_TARBALL)) $(dir $(ARTIFACT_REGISTRY_XPKG_FILE))
+	@$(MAKE) -C $(IMAGE_DIR)/$(PROJECT_NAME) img.build.shared \
+		PLATFORM=$(ARTIFACT_REGISTRY_PLATFORM) \
+		IMAGE_PLATFORMS=$(ARTIFACT_REGISTRY_OCI_PLATFORM) \
+		IMAGE=$(ARTIFACT_REGISTRY_RUNTIME_IMAGE) \
+		BUILD_ARGS="--output=type=oci,dest=$(ARTIFACT_REGISTRY_RUNTIME_TARBALL)"
+	@$(OK) building runtime image tarball $(ARTIFACT_REGISTRY_RUNTIME_TARBALL)
+	@$(INFO) building package $(ARTIFACT_REGISTRY_XPKG_FILE)
+	@$(CROSSPLANE_CLI) xpkg build \
+		--embed-runtime-image-tarball $(ARTIFACT_REGISTRY_RUNTIME_TARBALL) \
+		--package-root $(XPKG_DIR) \
+		--examples-root $(XPKG_PROCESSED_EXAMPLES_DIR) \
+		--ignore $(XPKG_IGNORE) \
+		--package-file $(ARTIFACT_REGISTRY_XPKG_FILE) || $(FAIL)
+	@$(OK) building package $(ARTIFACT_REGISTRY_XPKG_FILE)
+	@$(INFO) pushing package $(ARTIFACT_REGISTRY_PACKAGE)
+	@$(CROSSPLANE_CLI) xpkg push \
+		--package-files $(ARTIFACT_REGISTRY_XPKG_FILE) \
+		$(ARTIFACT_REGISTRY_PACKAGE) || $(FAIL)
+	@$(OK) pushing package $(ARTIFACT_REGISTRY_PACKAGE)
+
+.PHONY: artifact-registry.publish
+
+# ====================================================================================
 # Fallthrough
 
 # run `make help` to see the targets and options
@@ -243,6 +287,8 @@ Crossplane Targets:
     cobertura             Generate a coverage report for cobertura applying exclusions on generated files.
     submodules            Update the submodules, such as the common build scripts.
     run                   Run crossplane locally, out-of-cluster. Useful for development.
+    artifact-registry.publish
+                          Build and push a test provider package to Artifact Registry using a runtime tarball.
 
 endef
 # The reason CROSSPLANE_MAKE_HELP is used instead of CROSSPLANE_HELP is because the crossplane
